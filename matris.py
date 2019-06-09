@@ -4,6 +4,8 @@ from pygame import Rect, Surface
 import random
 import os
 import kezmenu
+import copy
+import numpy as np
 
 from tetrominoes import list_of_tetrominoes
 from tetrominoes import rotate
@@ -36,6 +38,10 @@ TRICKY_CENTERX = WIDTH-(WIDTH-(MATRIS_OFFSET+BLOCKSIZE*MATRIX_WIDTH+BORDERWIDTH*
 
 VISIBLE_MATRIX_HEIGHT = MATRIX_HEIGHT - 2
 
+pygame.init()
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("MaTris")
 
 class Matris(object):
     def __init__(self):
@@ -52,6 +58,8 @@ class Matris(object):
         falling tetromino is managed by `self.set_tetrominoes` instead. When the falling tetromino "dies",
         it will be placed in `self.matrix`.
         """
+        
+        self.history = ["green", "green", "red", "red"]
 
         self.next_tetromino = random.choice(list_of_tetrominoes)
         self.set_tetrominoes()
@@ -79,13 +87,185 @@ class Matris(object):
         self.linescleared_sound = get_sound("linecleared.wav")
         self.highscorebeaten_sound = get_sound("highscorebeaten.wav")
 
+    """
+    AI Code
+    """
+    def execute_moves(self, moves):
+        delta_x = moves[0]
+        rotation = moves[1]
+        
+        x_movement = delta_x - self.tetromino_position[1]
+        move_type = 'right'
+        if x_movement < 0:
+            move_type = 'left'
+        for i in range(np.abs(x_movement)):
+            self.request_movement(move_type)
+        self.request_rotation(rotation)
+        
+        self.hard_drop()
+        
+    def execute_move(self, move):
+        move_dict = {
+            "hard_drop" : lambda: self.request_movement("down"),
+            "rotate0": lambda: self.request_rotation(rotation_num=0),
+            "rotate1": lambda: self.request_rotation(rotation_num=1),
+            "rotate2": lambda: self.request_rotation(rotation_num=2),
+            "rotate3": lambda: self.request_rotation(rotation_num=3),
+            "left": lambda: self.request_movement("left"),
+            "right": lambda: self.request_movement("right")
+        }
+        
+        move_dict[move]()
+        
+    def execute_move_index(self, index):
+        moves = ["hard_drop", "left", "right", "rotate0", "rotate1", "rotate2", "rotate3"]
+        self.execute_move(moves[index])
+    def get_processing_matrix(self):
+        for y in range(self.size['height']):
+            for x in range(self.size['width']):
+                if self.matrix[(y, x)] != None:
+                    self.processing_matrix[y][x] = 1
+        return self.processing_matrix
+                    
+    def dict_to_matrix(self, dict_matrix):
+        """
+        Converts a tetris dictionary board representation to a
+        matrix representation
+        """
+        matrix = np.zeros((MATRIX_HEIGHT, MATRIX_WIDTH))
+        for y in range(MATRIX_HEIGHT):
+            for x in range(MATRIX_WIDTH):
+                if dict_matrix[(y, x)] != None:
+                    matrix[y][x] = 1
+        return matrix   
+        
+    def generate_next_states(self, matrix, tetromino):
+        num_rotations = 4
+        position = [0, 0] #y=0, x=0
+        end_states = []
+        for rotation in range(num_rotations):
+            rotated_shape = copy.copy(self.rotated(rotation, tetromino=tetromino))
+            for delta_x in range(8):
+                position = copy.copy(position)
+                """
+                If matrix is None, blend will do shape blending on the current matrix.
+                
+                Checks to see if block can be moved into x-position
+                """
+                if(not self.blend(rotated_shape, (position[0], position[1]+delta_x), matrix=matrix)):
+                    """
+                    Piece can't move in this x-position
+                    """
+                    continue
+                    
+                """
+                Simulates hard dropping
+                """
+                delta_y = 0
+                while(self.blend(rotated_shape, (position[0]+delta_y, position[1]+delta_x), matrix=matrix)):
+                    delta_y += 1
+                delta_y -= 1
+
+                end_state = self.blend(rotated_shape, (position[0]+delta_y, position[1]+delta_x), matrix=matrix)
+                """
+                There is a bug where this may be false because the block can't move down at all.
+                """
+                end_states.append([end_state, (delta_x, rotation)])
+        return end_states
+        
+        
+    def check_rotation(self, rotation_num=0):
+        """
+        Gets the rotated version of the shape and sees if
+        it fits inside the matrix.
+        
+        If it does then set that as the rotation and position
+        of the shape.
+        
+        There are 4 possible rotation numbers: 0, 1, 2, 3
+        """
+        rotation = rotation_num
+        shape = self.rotated(rotation)
+
+        y, x = self.tetromino_position_ai
+
+        position = (self.fits_in_matrix(shape, (y, x)) or
+                    self.fits_in_matrix(shape, (y, x+1)) or
+                    self.fits_in_matrix(shape, (y, x-1)) or
+                    self.fits_in_matrix(shape, (y, x+2)) or
+                    self.fits_in_matrix(shape, (y, x-2)))
+        # ^ Thats how wall-kick is implemented
+
+        if position and self.blend(shape, position):
+            return True
+        else:
+            return False
+    def emptiness(self, matrix=None):
+
+        if matrix is None:
+            matrix = self.matrix
+
+        empty = 0
+        check = False
+        for y in range(MATRIX_HEIGHT-1, 0, -1):
+            for x in range(MATRIX_WIDTH):
+                if matrix[(y, x)] == None:
+                    empty += 1
+                else:
+                    check = True
+            if not check:
+                if y == MATRIX_HEIGHT - 1:
+                    return 0
+                return (empty - 10) / ((MATRIX_HEIGHT - 1 - y)*10)
+            check = False
+        return empty / ((MATRIX_HEIGHT - 1)*10)
+    def get_harddrop_state(self, matrix=None):
+        
+
+        if matrix is None:
+            matrix = self.matrix
+        rotated_shape = copy.copy(self.rotated(self.tetromino_rotation))
+        position = copy.copy(self.tetromino_position)
+        """
+        If matrix is None, blend will do shape blending on the current matrix.
+                
+        Checks to see if block can be moved into x-position
+        """
+        
+                    
+        """
+        Simulates hard dropping
+        """
+        delta_y = 0
+        while(self.blend(rotated_shape, (position[0]+delta_y, position[1]), matrix=matrix)):
+            delta_y += 1
+        delta_y -= 1
+
+        end_state = self.blend(rotated_shape, (position[0]+delta_y, position[1]), matrix=matrix)
+        """
+        There is a bug where this may be false because the block can't move down at all.
+        """
+        return end_state
+    """
+    Origional code
+    """
 
     def set_tetrominoes(self):
         """
         Sets information for the current and next tetrominos
         """
         self.current_tetromino = self.next_tetromino
-        self.next_tetromino = random.choice(list_of_tetrominoes)
+        
+        for i in range(6):
+            self.next_tetromino = random.choice(list_of_tetrominoes)
+            if self.next_tetromino.color in self.history:
+                continue
+            else:
+               self.history.append(self.next_tetromino.color)
+               self.history.pop(0)
+               break
+                
+
         self.surface_of_next_tetromino = self.construct_surface_of_next_tetromino()
         self.tetromino_position = (0,4) if len(self.current_tetromino.shape) == 2 else (0, 3)
         self.tetromino_rotation = 0
@@ -100,7 +280,7 @@ class Matris(object):
         amount = 0
         while self.request_movement('down'):
             amount += 1
-        self.score += 10*amount
+        #self.score += 10*amount
 
         self.lock_tetromino()
 
@@ -230,12 +410,12 @@ class Matris(object):
         return position
                     
 
-    def request_rotation(self):
+    def request_rotation(self, rotation_num=1):
         """
         Checks if tetromino can rotate
         Returns the tetromino's rotation position if possible
         """
-        rotation = (self.tetromino_rotation + 1) % 4
+        rotation = (self.tetromino_rotation + rotation_num) % 4
         shape = self.rotated(rotation)
 
         y, x = self.tetromino_position
@@ -334,9 +514,9 @@ class Matris(object):
         self.lines += lines_cleared
 
         if lines_cleared:
-            if lines_cleared >= 4:
+            if lines_cleared:
                 self.linescleared_sound.play()
-            self.score += 100 * (lines_cleared**2) * self.combo
+            self.score += lines_cleared
 
             if not self.played_highscorebeaten_sound and self.score > self.highscore:
                 if self.highscore != 0:
@@ -354,7 +534,8 @@ class Matris(object):
         if not self.blend():
             self.gameover_sound.play()
             self.gameover()
-            
+        self.score += 1    
+
         self.needs_redraw = True
 
     def remove_lines(self):
@@ -423,7 +604,7 @@ class Matris(object):
         return surf
 
 class Game(object):
-    def main(self, screen):
+    def main(self, screen, callback=None):
         """
         Main loop for game
         Redraws scores and next tetromino each time the loop is passed through
@@ -442,11 +623,14 @@ class Game(object):
 
         while True:
             try:
-                timepassed = clock.tick(50)
+
+                timepassed = clock.tick(120)
                 if self.matris.update((timepassed / 1000.) if not self.matris.paused else 0):
+                    if callback is not None:
+                        callback(self.matris)
                     self.redraw()
             except GameOver:
-                return
+                return (True, self.matris.score)
       
 
     def redraw(self):
@@ -595,8 +779,5 @@ def construct_nightmare(size):
 
 
 if __name__ == '__main__':
-    pygame.init()
 
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption("MaTris")
     Menu().main(screen)

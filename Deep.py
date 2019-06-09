@@ -1,10 +1,14 @@
 ﻿import numpy as np
 import random
+import time
 import matris
 from collections import deque
 from keras.models import Sequential
 from keras.layers import Dense
 from keras.optimizers import Adam
+
+
+start = time.time()
 
 class DQNAgent:
     def __init__(self, state_size, action_size):
@@ -173,13 +177,7 @@ class DQNAgent:
         #state = self.matris.dict_to_matrix(np.reshape(state, [1, state_size]))
         tetromino = self.matris.current_tetromino
         k = np.random.rand()
-        if k <= self.epsilon / 10:
-            for action in range(7):
-                if self.matris.holes(self.matris.get_harddrop_state(4, [0,x])) is not None:
-                    #True
-                    continue
-
-        elif k <= self.epsilon:
+        if k <= self.epsilon:
             action = np.random.randint(0, 7)
         else:
             action, score = self.Q_max_moves(state, tetromino)
@@ -187,10 +185,10 @@ class DQNAgent:
             print("WARNING: Deep Q could not find a move (probably because the tetris game board is invalid.")
             return True
         
-        original_score = self.matris.lines
+        original_score = self.matris.score
         self.matris.execute_move_index(action)
         reward = 0.
-        reward = (self.matris.lines - original_score) ** 2
+        reward = (self.matris.score - original_score) ** 2 + (time.time() - start)*0.001
         new_state = np.reshape(self.matris.dict_to_matrix(self.matris.matrix), [1, state_size])
 
         if not self.matris.blend():
@@ -199,9 +197,9 @@ class DQNAgent:
         else:
             done = False
         if reward > 0.0:
-            reward -= self.matris.emptiness() + self.matris.holes(self.matris.get_harddrop_state()) * 0.2
+            reward -= self.matris.emptiness()
         else:
-            reward = -self.matris.emptiness(self.matris.get_harddrop_state()) - self.matris.holes(self.matris.get_harddrop_state()) * 0.2
+            reward = self.matris.emptiness(self.matris.get_harddrop_state())
 
         state = np.reshape(self.matris.dict_to_matrix(state), [1, state_size])
         self.remember(state, tetromino, action, reward, new_state, done)
@@ -232,6 +230,7 @@ if __name__ == "__main__":
         done = agent.act()
 
     for e in range(EPISODES):
+        start = time.time()
         done = game.main(matris.screen, callback) 
         if done[0]:
             print("episode: {}/{}, score: {}, e: {:.2}"
